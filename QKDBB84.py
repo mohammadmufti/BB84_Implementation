@@ -6,7 +6,7 @@ import random
 import numpy as np
 import os
 from datetime import datetime
-import time
+import time  # For measuring runtime
 
 
 class BB84Protocol:
@@ -15,7 +15,6 @@ class BB84Protocol:
         self.backend_name = backend_name
         self.service = None
         self.sampler = None
-        self.backend_supports_dynamic_circuits = False
         if use_real_device:
             try:
                 self.service = QiskitRuntimeService()
@@ -28,9 +27,6 @@ class BB84Protocol:
                     self.backend = min(available_backends,
                                        key=lambda x: x.status().pending_jobs)
                 print(f"Using quantum backend: {self.backend.name}")
-                # Check if the backend supports dynamic circuits
-                self.backend_supports_dynamic_circuits = self.backend.configuration().dynamic_circuits
-                print(f"Backend supports dynamic circuits: {self.backend_supports_dynamic_circuits}")
                 self.sampler = Sampler(mode=self.backend)
                 self.sampler.options.default_shots = 1024
             except Exception as e:
@@ -39,7 +35,6 @@ class BB84Protocol:
                 self.use_real_device = False
         if not self.use_real_device:
             self.backend = AerSimulator()  # Use AerSimulator for local simulation
-            self.backend_supports_dynamic_circuits = True  # Simulators support dynamic circuits
             self.sampler = Sampler(mode=self.backend)
             self.sampler.options.default_shots = 1024
 
@@ -137,7 +132,7 @@ def main():
     os.makedirs(outputs_dir, exist_ok=True)
 
     # Generate a timestamped directory name using local time (with seconds)
-    timestamp = datetime.now().strftime("%m%d%y_%H%M%S")  # Time stamped directories
+    timestamp = datetime.now().strftime("%m%d%y_%H%M%S")  # Updated format: MMDDYY_HHMMSS
     run_dir = os.path.join(outputs_dir, timestamp)
     os.makedirs(run_dir, exist_ok=True)
 
@@ -189,8 +184,10 @@ def main():
             log_and_print(f"Bob's bases: {bob_bases}")
 
             if eve_present:
-                if bb84.backend_supports_dynamic_circuits:
-                    log_and_print("\nBackend supports dynamic circuits. Using mid-circuit measurements for Eve.")
+                # Prompt the user to choose between dynamic circuits and split circuits
+                use_dynamic_circuits = input("Use dynamic circuits for Eve? (yes/no): ").lower().strip() == 'yes'
+                if use_dynamic_circuits:
+                    log_and_print("\nUsing dynamic circuits for Eve.")
                     # Create a single circuit with Eve's interception
                     circuit = bb84.create_quantum_circuit(alice_bits, alice_bases, bob_bases,
                                                           include_mid_circuit_measurement=True)
@@ -204,18 +201,37 @@ def main():
                     if bob_results is None:
                         log_and_print("Failed to execute the circuit.")
                         continue
+
+                    # Log Eve's bases and success rate for dynamic circuits
+                    eve_bases = alice_bases  # Eve uses Alice's bases for mid-circuit measurements
+                    log_and_print(f"Eve's bases: {eve_bases}")  # Log Eve's bases
+
+                    # Calculate Eve's success rate
+                    eve_success_count = sum(
+                        1 for i in range(n_bits) if eve_bases[i] == alice_bases[i] and bob_results[i] == alice_bits[i]
+                    )
+                    eve_success_rate = (eve_success_count / n_bits) * 100
+                    log_and_print(f"Eve's success rate: {eve_success_rate:.2f}%")
+
                 else:
-                    log_and_print(
-                        "\nBackend does not support dynamic circuits. Falling back to split-circuit approach.")
+                    log_and_print("\nUsing split circuits for Eve.")
                     # Step 1: Eve's measurement
                     eve_bases = [random.randint(0, 1) for _ in range(n_bits)]
+                    log_and_print(f"Eve's bases: {eve_bases}")  # Log Eve's bases
                     eve_circuit = bb84.create_quantum_circuit(alice_bits, alice_bases, eve_bases,
                                                               include_mid_circuit_measurement=False)
                     eve_results = bb84.simulate_or_run_circuit(eve_circuit)
                     if eve_results is None:
                         log_and_print("Failed to execute Eve's circuit.")
                         continue
-                    log_and_print(f"Eve's measurement results: {eve_results}")
+                    log_and_print(f"Eve's measurement results: {eve_results}")  # Log Eve's measurement results
+
+                    # Calculate Eve's success rate
+                    eve_success_count = sum(
+                        1 for i in range(n_bits) if eve_bases[i] == alice_bases[i] and eve_results[i] == alice_bits[i]
+                    )
+                    eve_success_rate = (eve_success_count / n_bits) * 100
+                    log_and_print(f"Eve's success rate: {eve_success_rate:.2f}%")
 
                     # Step 2: Bob's measurement
                     bob_circuit = bb84.create_quantum_circuit(eve_results, alice_bases, bob_bases,
